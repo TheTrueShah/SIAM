@@ -1,0 +1,326 @@
+---
+title: "Alzheirmer's Disease Data"
+author: "Ryan Shahbaba"
+date: "2023-06-08"
+output: html_document
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE, message=FALSE}
+
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(car)
+library(GGally)
+library(gtsummary)
+library(webshot2)
+library(scales)
+
+```
+# NACC Data 
+
+We use the publicly available data provided by the National Alzheimer's Coordinating Center (NACC). Subjects are diagnosed to have either healthy cognitive (HC), mild cognitive impairment (MCI), and Alzheimer's disease (AD). Each subject was examined using several tests including Mini Mental State Examination (MMSE), reciting the name of animals (ANIMALS), and trailing letters and numbers (TMTB). Higher scores are better for the first two tests, whereas lower scores are preferred for the third one. Here, we investiage whether the test scores are significantly associated with the diagnosis, as well as several dempghraphic and clinical variables including age, education, gender, and blood pressure.  
+
+
+# Variables
+
+Response Variables:
+
+MMSE: Mini Mental State Examination
+
+TMTB: cognitive impariment test - trail letters and numbers 
+
+ANIMALS: cognitive impariment test - recite animals
+
+Explanatory Variables:
+
+age: age of patient at time of tests taken
+
+education: years of education patient underwent
+
+female: binary variable; 0 = male, 1 = female  
+
+bpsys: systolic blood pressure
+
+```{r, echo=FALSE}
+
+load('alzheimer.Rdata')
+
+alzheimer <- alzheimer %>% 
+  dplyr::select(diagnosis, female, age, educ, bpsys, naccmmse, animals, trailb) %>%
+  mutate_at(c('diagnosis', 'female'), as.factor) %>% 
+  rename(MMSE = naccmmse, TMTB = trailb, ANIMALS = animals, education = educ) %>% 
+  na.omit()
+
+glimpse(alzheimer)
+
+alzeimer_summary <- 
+  alzheimer %>% tbl_summary()
+
+alzeimer_summary
+
+# as_gt(alzeimer_summary) %>% gt::as_latex()
+
+# alzeimer_summary %>% # build gtsummary table
+#   as_gt() %>% # convert to gt table
+#   gt::gtsave( # save table as image
+#     filename = "alz_summary.png"
+#   )
+# 
+# alzeimer_summary %>% 
+#   as_gt() %>% # convert to gt table
+#   gt::gtsave( # save table as image
+#     filename = "alz_summary.png"
+#   )
+
+```
+
+# Method 1 -- Integrated Multivariate Regression (IMR)
+
+We start by finding the first principle component. As we can see, it is a linear combination of the three scores, where the first two scores have negative weights and the third one has a positive weight. Therefore, for our combined score, lower values are better (i.e., the opposite direction to MMSE and ANIMALS, and the same direction as TMTB).
+
+```{r}
+
+alzheimer_response <- alzheimer %>%
+  dplyr::select("MMSE", "ANIMALS", "TMTB")  
+
+png(file='cor_mat_alzheimer.png')
+ggpairs(alzheimer_response, aes(alpha = 0.5), 
+        upper = list(continuous = wrap("cor", size = 6)))
+dev.off()
+
+pc <- prcomp(alzheimer_response, center = TRUE, scale. = TRUE)
+
+print(pc$rotation)
+```
+
+
+Using our method, we find that compared to the healthy subjects, the combined score is on average 0.99 unit higher for MCI, and 2.41 units higher for AD subjects (keeping all other variables constant). While gender is not statistically significant (p-value = 0.786), for one year increase in age, the combined score increase by 0.02 on average (keeping all other variables constant). For each additional year of education, the score improves (decreases) by 0.098 unit on average (keeping all other variables constant). Higher blood pressure is also associated (p-value = 0.049) with higher (worse) score. 
+
+```{r}
+
+# this is another way of getting the first PC
+y <- scale(alzheimer_response)
+z <- pc$rotation[1, 1] * y[, 1] + 
+  pc$rotation[2, 1]* y[, 2] + 
+  pc$rotation[3, 1]* y[, 3]
+
+pc1 <- pc$x[, 1]
+
+IMR_res <- 
+  glm(pc1 ~ diagnosis + age + female + education + bpsys , data = alzheimer, family = gaussian) %>% 
+  tbl_regression(estimate_fun = function(x) style_number(x, digits = 3))
+
+IMR_res
+
+IMR_res %>% 
+ as_gt() %>% # convert to gt table
+  gt::gtsave( # save table as image
+    filename = "IMR_alz_res.png"
+  )
+ 
+```
+
+
+```{r}
+
+# Scree plot function
+screeplot <- function(pc) {
+  # Calculate the eigenvalues
+  eigenvalues <- pc$sdev^2
+  
+  # Calculate the proportion of variance explained
+  prop_var <- eigenvalues / sum(eigenvalues)
+  
+  # Create a data frame for the scree plot
+  scree_data <- data.frame(Components = 1:length(prop_var),
+                           Eigenvalues = eigenvalues,
+                           Proportion = prop_var)
+  
+  # Create the scree plot
+  scree_plot <- ggplot(scree_data, aes(x = Components, y = Eigenvalues)) +
+    geom_point(size = 3) +
+    geom_line(linewidth = 2) +
+    ylab("Eigenvalues") +
+    xlab("Principal Component Number") +
+    theme(legend.position = "right", axis.text=element_text(size=18, face="bold"),
+        axis.title=element_text(size=18,face="bold"),
+        legend.text=element_text(size=14), 
+        legend.title = element_text(size=20)) +
+    scale_x_continuous(breaks= seq(1, 3))
+
+    #ggtitle("Scree Plot") +
+    #theme_minimal()
+    
+  
+  # Print the scree plot
+  print(scree_plot)
+}
+
+
+# Call the scree plot function with your variable 'pc'
+png(file='screeplot_alzheimer.png')
+screeplot(pc)
+dev.off()
+
+
+png(file='alz_pca_var.png')
+temp <- data.frame(Components=1:ncol(alzheimer_response), s=100*cumsum ((pc$sdev^2)/sum(pc$sdev^2)))
+ggplot(data=temp, aes(Components, s)) + geom_line(linewidth = 2) +
+  geom_point(size = 3) + xlab('Number of Components') + ylab('Explained Variance (%)') + 
+  ylim(0, 100) +
+  theme(legend.position = "right", axis.text=element_text(size=18, face="bold"),
+        axis.title=element_text(size=18,face="bold"),
+        legend.text=element_text(size=14), 
+        legend.title = element_text(size=20)) + 
+  scale_x_continuous(breaks= seq(1, 3))
+dev.off()
+
+
+```
+
+```{r}
+
+data <- alzheimer_response
+
+# Compute the correlation matrix
+cor_matrix <- cor(data)
+
+# Calculate the eigenvalues
+eigen_values <- eigen(cor_matrix)$values
+
+# Print the eigenvalues
+print(eigen_values)
+
+```
+
+
+# Method 2 -- Individual Regression Models (IRM)
+
+Similar results are obtained using three individual regression models, except for blood pressure. 
+
+```{r}
+
+
+irm_res1 <- 
+  glm(MMSE ~ diagnosis + age + female + education + bpsys , data = alzheimer, family = gaussian) %>% 
+  tbl_regression(estimate_fun = function(x) style_number(x, digits = 3))
+
+irm_res1
+
+irm_res1 %>% 
+ as_gt() %>% # convert to gt table
+  gt::gtsave( # save table as image
+    filename = "irm_alz_res1.png"
+  )
+
+
+irm_res2 <- 
+  glm(ANIMALS ~ diagnosis + age + female + education + bpsys , data = alzheimer, family = gaussian) %>% 
+  tbl_regression(estimate_fun = function(x) style_number(x, digits = 3))
+
+irm_res2
+
+irm_res2 %>% 
+ as_gt() %>% # convert to gt table
+  gt::gtsave( # save table as image
+    filename = "irm_alz_res2.png"
+  )
+
+
+
+irm_res3 <- 
+  glm(TMTB ~ diagnosis + age + female + education + bpsys , data = alzheimer, family = gaussian) %>% 
+  tbl_regression(estimate_fun = function(x) style_number(x, digits = 3))
+
+irm_res3
+
+irm_res3 %>% 
+ as_gt() %>% # convert to gt table
+  gt::gtsave( # save table as image
+    filename = "irm_alz_res3.png"
+  )
+
+
+
+```
+# Method 3 -- Multivariate Regression (MR)
+
+The multivariate regression model also provide similar results, except for blood pressure, which is not statistically significant (p-value = 0.631). 
+
+```{r}
+
+
+mlm1 <- lm(cbind(ANIMALS, TMTB, MMSE) ~ diagnosis + age + female + education + bpsys + bpsys, data = alzheimer)
+
+
+annovamodel <- Anova(mlm1)
+#alzheimer_response %>% gt()
+
+print(annovamodel)
+
+
+summary(manova(cbind(ANIMALS, TMTB, MMSE) ~ diagnosis + age + female + education + bpsys + bpsys, data = alzheimer))
+
+```
+
+```{r}
+
+data <- data.frame(alzheimer$MMSE, alzheimer$TMTB, alzheimer$ANIMALS)
+
+cor_matrix <- cor(data)
+
+print(cor_matrix)
+
+```
+
+
+```{r}
+
+
+data <- alzheimer_response
+
+cor_matrix <- cor(data)
+
+# Set upper triangle values to NA
+cor_matrix[upper.tri(cor_matrix)] <- NA
+
+# Melt the correlation matrix
+melted_cor_matrix <- reshape2::melt(cor_matrix, na.rm = TRUE)
+
+png(file='alz_heat_map.png')
+ggplot(data = melted_cor_matrix) +
+  geom_tile(aes(x = Var1, y = Var2, fill = value)) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", 
+                       midpoint = 0, limit = c(-1, 1), space = "Lab",
+                       name = "Correlation") +
+  coord_fixed() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        axis.text=element_text(size=18, face="bold"),
+        axis.title=element_text(size=18,face="bold"),
+        legend.text=element_text(size=14), 
+        legend.title = element_text(size=20))+
+  labs(title = "Correlation Matrix Heatmap")
+dev.off()
+
+
+png(file='alz_corr_mat.png')
+ggpairs(data, aes(alpha = 0.5), 
+        upper = list(continuous = wrap("cor", size = 8))) + 
+  #theme_grey(base_size = 14) +
+  theme(axis.title=element_text(face = "bold"))+
+  theme(strip.text.x = element_text(size = 18, face='bold'),
+           strip.text.y = element_text(size = 18, face='bold'))+
+  theme(legend.position = "right", axis.text=element_text(size=16, face="bold"),
+        axis.title=element_text(size=18,face="bold"),
+        legend.text=element_text(size=14), 
+        legend.title = element_text(size=20))
+dev.off()
+
+```

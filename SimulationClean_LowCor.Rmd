@@ -1,0 +1,411 @@
+---
+title: "Simulation Study II -- Low Correlation"
+author: "Ryan Shahbaba"
+output:
+  html_document: default
+  pdf_document: default
+date: "2023-06-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(readr)
+library(car)
+library(GGally)
+library(gtsummary)
+library(webshot2)
+
+sample_sizes <- c(50, 100, 150, 200, 250, 300, 350, 400, 450, 500)
+beta <- 0.5
+
+set.seed(100)
+a <- rnorm(5, 0, 1)
+b <- rnorm(5, 0, 1)
+s <- runif(5, 2, 3)
+
+nsim <- 1000
+```
+
+# Simulation Data 
+
+This is similar to Simulation I, but we increase the variance of the outcome variables to reduce their correlation. 
+
+We assume there is a binary variable, called gene, that is associated with the overall health, which is not directly observed, hence, called latent. Instead, we observe 5 response variables, which can be considered as 5 different medical tests that capture the overall help, i.e., manifestations of the latent response variable. We denote gene as $X$, the latent response variable as $Z$, and the 5 observed variables as ${Y_1, Y_2, \ldots, Y_5}$. 
+
+
+# Method 1 -- Integrated Multivariate Regression (IMR)
+
+The first method we are looking at is conducting a principal component analysis [PCA], a data dimension reductionality method, on all the response variables, The first Principal Component [pc1] explains the most variance, so in each simulation, we will extract pc1 as a composite score and use it as the outcome variable in a linear regression model with gene as the explanatory variable. 
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+
+# Function to calculate the proportion of significant p-values
+calculate_prop_significant <- function(n) {
+  p_values_pc <- vector("numeric", nsim)
+  
+  for (i in 1:nsim) {
+    set.seed(i)
+    
+    gene <- rbinom(n, 1, 0.25)
+    latent <- rnorm(n, 1 + beta * gene, 1)
+    
+    y1 <- a[1] + b[1] * latent + rnorm(n, 0, s[1])
+    y2 <- a[2] + b[2] * latent + rnorm(n, 0, s[2])
+    y3 <- a[3] + b[3] * latent + rnorm(n, 0, s[3])
+    y4 <- a[4] + b[4] * latent + rnorm(n, 0, s[4])
+    y5 <- a[5] + b[5] * latent + rnorm(n, 0, s[5])
+    
+    dataset <- data.frame(y1, y2, y3, y4, y5)
+    pc <- prcomp(dataset, center = TRUE, scale. = TRUE)
+    
+    pc1 <- pc$x[, 1]
+    
+    reg_model_pc <- glm(pc1 ~ gene, data = dataset)
+    
+    p_values_pc[i] <- coef(summary(reg_model_pc))[2, "Pr(>|t|)"]
+  }
+  
+  prop_significant <- mean(p_values_pc < 0.05)
+  return(prop_significant)
+}
+
+# Vector to store the proportions of significant p-values for each n
+pc_prop_significant <- numeric(10)
+
+# Loop through different values of n
+for (i in 1:10) {
+  n <- 50 * i
+  pc_prop_significant[i] <- calculate_prop_significant(n)
+}
+
+result_table_pc <- data.frame(Sample_Size = sample_sizes,
+                           PC_Prop_Significant = pc_prop_significant)
+
+print(result_table_pc)
+
+```
+
+```{r}
+
+
+
+
+
+
+# Scree plot function
+screeplot <- function(pc) {
+  # Calculate the eigenvalues
+  eigenvalues <- pc$sdev^2
+  
+  # Calculate the proportion of variance explained
+  prop_var <- eigenvalues / sum(eigenvalues)
+  
+  # Create a data frame for the scree plot
+  scree_data <- data.frame(Components = 1:length(prop_var),
+                           Eigenvalues = eigenvalues,
+                           Proportion = prop_var)
+  
+  # Create the scree plot
+  scree_plot <- ggplot(scree_data, aes(x = Components, y = Eigenvalues)) +
+    geom_point(size = 3) +
+    geom_line(linewidth = 2) +
+    ylab("Eigenvalues") +
+    xlab("Principal Component Number") +
+    theme(legend.position = "right", axis.text=element_text(size=16, face="bold"),
+        axis.title=element_text(size=18,face="bold"),
+        legend.text=element_text(size=18), 
+        legend.title = element_text(size=20))
+
+    #ggtitle("Scree Plot") +
+    #theme_minimal()
+    
+  
+  # Print the scree plot
+  print(scree_plot)
+}
+
+set.seed(10)  
+n <- 500
+  
+gene <- rbinom(n, 1, 0.25)
+latent <- rnorm(n, 1 + beta * gene, 1)
+    
+y1 <- a[1] + b[1] * latent + rnorm(n, 0, s[1])
+y2 <- a[2] + b[2] * latent + rnorm(n, 0, s[2])
+y3 <- a[3] + b[3] * latent + rnorm(n, 0, s[3])
+y4 <- a[4] + b[4] * latent + rnorm(n, 0, s[4])
+y5 <- a[5] + b[5] * latent + rnorm(n, 0, s[5])
+    
+dataset <- data.frame(y1, y2, y3, y4, y5)
+pc <- prcomp(dataset, center = TRUE, scale. = TRUE)
+ 
+# Call the scree plot function with your variable 'pc'
+
+png(file='low_corr_pca_eigen.png')
+screeplot(pc)
+dev.off()
+
+
+png(file='low_corr_pca_var.png')
+temp <- data.frame(Components=1:ncol(dataset), s=100*cumsum ((pc$sdev^2)/sum(pc$sdev^2)))
+ggplot(data=temp, aes(Components, s)) + geom_line(linewidth = 2) +
+  geom_point(size = 3) + xlab('Number of Components') + ylab('Explained Variance (%)') + 
+  ylim(0, 100.01) +
+  theme(legend.position = "right", axis.text=element_text(size=16, face="bold"),
+        axis.title=element_text(size=18,face="bold"),
+        legend.text=element_text(size=14), 
+        legend.title = element_text(size=20))
+dev.off()
+
+
+pc_load1 <- data.frame(x = as.factor(seq(1, ncol(dataset))), b = as.vector(pc$rotation[, 1]))
+ggplot(data=pc_load1, aes(x=x, y=b)) + geom_point(cex=3) + ylab("Loading") +   #theme(plot.margin = unit(c(1, 1, 3, 1),"lines")) + 
+  xlab('Variables')+
+  scale_x_discrete(labels=c('Y1', 'Y2', 'Y3', 'Y4', 'Y5')) +
+  theme(axis.text.x = element_text(size=12))
+
+```
+
+```{r}
+
+
+
+data <- data.frame(y1, y2, y3, y4, y5)
+
+# Compute the correlation matrix
+cor_matrix <- cor(data)
+
+# Calculate the eigenvalues
+eigen_values <- eigen(cor_matrix)$values
+
+# Print the eigenvalues
+print(eigen_values)
+
+```
+
+# Method 2 -- Individual Regression Models (IR)
+
+For the second method we run 1000 simulations once again with the same data sets. However this time instead of conducting a PCA, we put each response variable in a separate linear regression model with gene once again as the explanatory variable. 
+
+```{r}
+# Initialize variables
+
+linear_prop_significant <- numeric(length(sample_sizes))
+adjust_linear_prop_significant <- numeric(length(sample_sizes))
+
+# Perform simulations for each sample size
+for (j in 1:length(sample_sizes)) {
+  p_values_irm <- matrix(NA, nsim, 5)
+  p_values_irma <- matrix(NA, nsim, 5)
+
+  for (i in 1:nsim) {
+    set.seed(i)  # Set a different seed for each iteration
+
+    n <- sample_sizes[j]
+
+    gene <- rbinom(n, 1, 0.25)
+    latent <- rnorm(n, 1 + beta * gene, 1)
+
+    
+    y1 <- a[1] + b[1] * latent + rnorm(n, 0, s[1])
+    y2 <- a[2] + b[2] * latent + rnorm(n, 0, s[2])
+    y3 <- a[3] + b[3] * latent + rnorm(n, 0, s[3])
+    y4 <- a[4] + b[4] * latent + rnorm(n, 0, s[4])
+    y5 <- a[5] + b[5] * latent + rnorm(n, 0, s[5])
+
+    dataset <- data.frame(gene, y1, y2, y3, y4, y5)
+
+    reg_model_y1 <- glm(y1 ~ gene, data = dataset)
+    reg_model_y2 <- glm(y2 ~ gene, data = dataset)
+    reg_model_y3 <- glm(y3 ~ gene, data = dataset)
+    reg_model_y4 <- glm(y4 ~ gene, data = dataset)
+    reg_model_y5 <- glm(y5 ~ gene, data = dataset)
+
+    p_values_irm[i, 1] <- coef(summary(reg_model_y1))[2, "Pr(>|t|)"]
+    p_values_irm[i, 2] <- coef(summary(reg_model_y2))[2, "Pr(>|t|)"]
+    p_values_irm[i, 3] <- coef(summary(reg_model_y3))[2, "Pr(>|t|)"]
+    p_values_irm[i, 4] <- coef(summary(reg_model_y4))[2, "Pr(>|t|)"]
+    p_values_irm[i, 5] <- coef(summary(reg_model_y5))[2, "Pr(>|t|)"]
+    
+    p_values_irma[i, ] <- p.adjust(p_values_irm[i, ])
+    
+  }
+
+  linear_prop_significant[j] <- mean(p_values_irm < 0.05)
+  adjust_linear_prop_significant[j] <- mean(p_values_irma < 0.05)
+}
+
+
+
+# Print the results
+result_table <- data.frame(Sample_Size = sample_sizes,
+                           Linear_Prop_Significant = linear_prop_significant, Adjust_Linear_Prop_Significant = adjust_linear_prop_significant)
+
+
+print(result_table)
+
+```
+
+# Method 3 -- Multivariate Regression (MR)
+
+
+In this method we once again run the same number of simulations with the same increments of sample sizes, however we conduct a multivariate regression model instead using variables "y1", "y2" "y3", "y4", "y5" as response variables, and gene as the explanatory variable. We then collect all 5 p-values from each regression model and use a MANOVA to obtain the p-value. 
+
+
+
+```{r}
+# Initialize a vector to store the results
+multi_prop_significant <- numeric(10)
+
+# Loop over different values of n
+for (j in 1:10) {
+  n <- 50 * j  # Change the value of n
+  
+  p_values <- vector('numeric', length = nsim)
+  
+  for (i in 1:nsim) {
+    set.seed(i)
+    
+    gene <- rbinom(n, 1, 0.25)
+    latent <- rnorm(n, 1 + beta * gene, 1)
+    
+    
+    y1 <- a[1] + b[1] * latent + rnorm(n, 0, s[1])
+    y2 <- a[2] + b[2] * latent + rnorm(n, 0, s[2])
+    y3 <- a[3] + b[3] * latent + rnorm(n, 0, s[3])
+    y4 <- a[4] + b[4] * latent + rnorm(n, 0, s[4])
+    y5 <- a[5] + b[5] * latent + rnorm(n, 0, s[5])
+    
+    dataset <- data.frame(y1, y2, y3, y4, y5, gene)
+    
+    reg_model <- lm(cbind(y1, y2, y3, y4, y5) ~ gene, data = dataset)
+    
+    anova_result <- anova(reg_model)
+    p_values[i] <- anova_result$"Pr(>F)"[2]
+  }
+  
+  
+  multi_prop_significant[j] <- mean(p_values < 0.05)
+}
+
+# Print the results
+# print(multi_prop_significant)
+
+result_table_multi <- data.frame(Sample_Size = sample_sizes,
+                           Multi_Prop_Significant = multi_prop_significant)
+
+print(result_table_multi)
+
+
+```
+
+# Power Comparison
+
+```{r}
+# Create column names
+columns <- c(50, 100, 150, 200, 250, 300, 350, 400, 450, 500)
+
+
+# Create row names
+rows <- c("IMR", "IR", "MR")
+
+# Create an empty matrix
+matrix_data <- matrix(nrow = length(rows), ncol = length(columns))
+colnames(matrix_data) <- columns
+rownames(matrix_data) <- rows
+
+# Assign values to the matrix
+matrix_data["IMR", ] <- pc_prop_significant
+matrix_data["IR", ] <- linear_prop_significant
+matrix_data["MR", ] <- multi_prop_significant
+#matrix_data["IRA", ] <- adjust_linear_prop_significant
+
+
+
+# Print the matrix
+print(matrix_data)
+```
+
+
+
+
+As we can see the pc method has the largest power (i.e., percentage of significant p-values) for each sample size out of all 4 methods. Next up is the unudjusted linear regression models. The multivariate regression model has higher percentages of significant p-values up until a sample size 400, where the adjusted linear regression models have the same percentage, and eventually surpass the multivariate regression models.
+
+```{r}
+
+df <- data.frame(x = columns)
+for (row in rows) {
+  df[row] <- matrix_data[row, ]
+}
+
+df <- tidyr::gather(df, Method, value, -x)
+
+df$Method <- factor(df$Method, levels = c('IR', 'MR', 'IMR'))
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+# Plot using ggplot2
+png(file='low_corr_power.png')
+ggplot(data = df, aes(x = x, y = value, color = Method)) +
+  geom_line(linewidth = 2) +
+  labs(x = "Sample Size", y = "Power") +
+  scale_x_continuous(breaks = columns) +
+  ylim(0, 1) + 
+  theme(legend.position = "right", axis.text=element_text(size=16, face="bold"),
+        axis.title=element_text(size=18,face="bold"),
+        legend.title = element_text(size=20),
+        legend.text=element_text(size=18))+
+  scale_colour_manual(values=cbPalette)
+dev.off()
+```
+
+```{r}
+data <- data.frame(y1, y2, y3, y4, y5)
+
+cor_matrix <- cor(data)
+
+print(cor_matrix)
+
+```
+
+```{r}
+data <- data.frame(y1, y2, y3, y4, y5)
+
+cor_matrix <- cor(data)
+
+# Set upper triangle values to NA
+cor_matrix[upper.tri(cor_matrix)] <- NA
+
+# Melt the correlation matrix
+melted_cor_matrix <- reshape2::melt(cor_matrix, na.rm = TRUE)
+
+ggplot(data = melted_cor_matrix) +
+  geom_tile(aes(x = Var1, y = Var2, fill = value)) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", 
+                       midpoint = 0, limit = c(-1, 1), space = "Lab",
+                       name = "Correlation") +
+  coord_fixed() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
+
+
+png(file='low_corr_mat.png')
+ggpairs(data, aes(alpha = 0.5), 
+        upper = list(continuous = wrap("cor", size = 7)), columnLabels = c('Y1', 'Y2', 'Y3', 'Y4', 'Y5')) + 
+  #theme_grey(base_size = 14) +
+  theme(axis.title=element_text(face = "bold"))+
+  theme(strip.text.x = element_text(size = 16, face='bold'),
+           strip.text.y = element_text(size = 16, face='bold'))+
+  theme(legend.position = "right", axis.text=element_text(size=16, face="bold"),
+        axis.title=element_text(size=18,face="bold"),
+        legend.text=element_text(size=18), 
+        legend.title = element_text(size=20))
+dev.off()
+```
